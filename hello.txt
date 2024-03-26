@@ -1,2 +1,6 @@
 hello-world
+<<<<<<< HEAD
 this is main
+=======
+this is new
+>>>>>>> test1
