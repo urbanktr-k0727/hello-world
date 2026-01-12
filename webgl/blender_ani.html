@@ -1,0 +1,501 @@
+<!doctype html>
+<html lang="ja">
+
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport"
+    content="width=device-width, initial-scale=1" />
+  <title>Blenderモデル表示 & アニメ速度コントロール</title>
+  <style>
+    :root {
+      --bg: #0b1020;
+      --fg: #e8eefc;
+      --muted: #9fb0d1;
+      --card: #121a34;
+      --accent: #7aa2ff;
+    }
+
+    html,
+    body {
+      height: 100%;
+    }
+
+    body {
+      margin: 0;
+      font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, "Hiragino Kaku Gothic ProN", Meiryo, sans-serif;
+      background: var(--bg);
+      color: var(--fg);
+    }
+
+    .app {
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+      height: 100%;
+      min-height: 100vh;
+    }
+
+    header {
+      display: flex;
+      gap: .75rem;
+      align-items: center;
+      padding: .75rem 1rem;
+      background: linear-gradient(180deg, rgba(255, 255, 255, .06), rgba(255, 255, 255, 0));
+      border-bottom: 1px solid rgba(255, 255, 255, .08);
+    }
+
+    header h1 {
+      font-size: 1rem;
+      font-weight: 600;
+      margin: 0;
+      letter-spacing: .02em;
+    }
+
+    .controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: .75rem;
+      align-items: center;
+      margin-left: auto
+    }
+
+    .card {
+      background: var(--card);
+      border: 1px solid rgba(255, 255, 255, .06);
+      border-radius: 14px;
+      padding: .5rem .75rem;
+    }
+
+    label {
+      font-size: .85rem;
+      color: var(--muted)
+    }
+
+    input[type="range"] {
+      width: 220px
+    }
+
+    #drop {
+      border: 1px dashed rgba(255, 255, 255, .25);
+      border-radius: 14px;
+      padding: .4rem .6rem;
+      color: var(--muted)
+    }
+
+    #drop.drag {
+      border-color: var(--accent);
+      background: rgba(122, 162, 255, .08);
+      color: var(--fg)
+    }
+
+    #scene {
+      position: relative;
+      min-height: 420px
+    }
+
+    canvas {
+      display: block;
+      width: 100%;
+      height: 100%
+    }
+
+    .overlay {
+      position: absolute;
+      right: 10px;
+      top: 10px;
+      background: rgba(0, 0, 0, .6);
+      padding: .5rem .65rem;
+      border-radius: 10px;
+      font-size: .8rem;
+      color: #cfe0ff;
+      max-width: 60ch
+    }
+
+    footer {
+      display: flex;
+      gap: 1rem;
+      align-items: center;
+      padding: .5rem 1rem;
+      border-top: 1px solid rgba(255, 255, 255, .08);
+      color: var(--muted);
+    }
+
+    progress {
+      accent-color: var(--accent);
+      width: 220px;
+      height: 6px
+    }
+
+    a {
+      color: var(--accent);
+      text-decoration: none
+    }
+  </style>
+</head>
+
+<body>
+  <div class="app">
+    <header>
+      <h1>Blender → WebGL (three.js) ビューア</h1>
+      <div class="controls">
+        <div class="card"
+          title="アニメーション再生速度">
+          <label for="speed">速度 <span id="speedVal">1.00×</span></label><br>
+          <input id="speed"
+            type="range"
+            min="0"
+            max="3"
+            step="0.01"
+            value="1" />
+        </div>
+        <div class="card"
+          title="モデルファイルを選択 (.glb / .gltf)">
+          <label for="file">モデルを選択</label><br>
+          <input id="file"
+            type="file"
+            accept=".glb,.gltf,model/gltf-binary,model/gltf+json" />
+          <div style="margin-top:.4rem; display:flex; gap:.5rem; align-items:center;">
+            <button id="loadBtn"
+              type="button"
+              disabled
+              style="cursor:pointer; border:none; padding:.45rem .7rem; border-radius:10px; background:var(--accent); color:#0b1020; font-weight:600;">読み込む</button>
+            <small id="fileName"
+              style="color:var(--muted)">ファイル未選択</small>
+          </div>
+        </div>
+        <div id="drop"
+          class="card"
+          title="ここにドラッグ＆ドロップでも読み込めます">ファイルをここにドロップ</div>
+      </div>
+    </header>
+
+    <main id="scene"></main>
+
+    <footer>
+      <div>読み込み: <progress id="prog"
+          value="0"
+          max="100"></progress> <span id="progTxt">0%</span></div>
+      <div style="margin-left:auto">ヒント: Blenderから<strong>.glb</strong>で書き出して、このページで開くとアニメを再生できます。</div>
+    </footer>
+  </div>
+
+  <div class="overlay"
+    id="info">—</div>
+
+  <!-- three.js modules -->
+  <script type="module">
+    import * as THREE from './libs/three/build/three.module.js';
+    import { OrbitControls } from './libs/three/examples/jsm/controls/OrbitControls.js';
+    import { GLTFLoader } from './libs/three/examples/jsm/loaders/GLTFLoader.js';
+    import { DRACOLoader } from './libs/three/examples/jsm/loaders/DRACOLoader.js';
+    import { KTX2Loader } from './libs/three/examples/jsm/loaders/KTX2Loader.js';
+    import { RoomEnvironment } from './libs/three/examples/jsm/environments/RoomEnvironment.js';
+
+    const container = document.getElementById('scene');
+    const info = document.getElementById('info');
+
+    // Renderer
+    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.setSize(container.clientWidth, container.clientHeight);
+    renderer.outputColorSpace = THREE.SRGBColorSpace; // 正しい色空間
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.0;
+    container.appendChild(renderer.domElement);
+
+    // Scene & Env
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color('#0b1020');
+    const pmrem = new THREE.PMREMGenerator(renderer);
+    scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+
+    // Camera
+    const camera = new THREE.PerspectiveCamera(50, container.clientWidth / container.clientHeight, 0.1, 5000);
+    camera.position.set(4, 2.5, 6);
+
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+    controls.target.set(0, 1, 0);
+
+    // Lights
+    const hemi = new THREE.HemisphereLight(0xffffff, 0x111122, 0.7);
+    scene.add(hemi);
+    const dir = new THREE.DirectionalLight(0xffffff, 0.8);
+    dir.position.set(5, 10, 7);
+    scene.add(dir);
+
+    // Debug helpers (必要なら有効化)
+    // scene.add(new THREE.AxesHelper(1));
+
+    // Animation state
+    let mixer = null;
+    let activeActions = [];
+    const clock = new THREE.Clock();
+
+    // Loaders
+    const loader = new GLTFLoader();
+    const draco = new DRACOLoader();
+    draco.setDecoderPath('./libs/three/examples/jsm/libs/draco/');
+    loader.setDRACOLoader(draco);
+
+    const ktx2 = new KTX2Loader();
+    ktx2.setTranscoderPath('./libs/three/examples/jsm/libs/basis/');
+    ktx2.detectSupport(renderer);
+    loader.setKTX2Loader(ktx2);
+
+    const prog = document.getElementById('prog');
+    const progTxt = document.getElementById('progTxt');
+
+    function setInfo(msg) { info.textContent = msg; }
+
+    loader.manager.onError = (url) => {
+      setInfo('読み込みエラー: ' + url);
+    };
+
+    loader.manager.onStart = () => { prog.value = 0; progTxt.textContent = '0%'; };
+    loader.manager.onProgress = (_, loaded, total) => {
+      const v = total ? Math.round(loaded / total * 100) : 0;
+      prog.value = v; progTxt.textContent = v + "%";
+    };
+
+    async function loadGLTF(urlOrFile) {
+      try {
+        // 既存を破棄
+        if (mixer) { mixer.stopAllAction(); mixer.uncacheRoot(scene); }
+        activeActions.forEach(a => a.stop());
+        activeActions = [];
+        const toRemove = [];
+        scene.traverse(o => { if (o.userData.__isModelRoot) { toRemove.push(o); } });
+        toRemove.forEach(o => scene.remove(o));
+
+        setInfo('読み込み中…');
+
+        const gltf = await new Promise((resolve, reject) => {
+          loader.load(
+            (urlOrFile instanceof File) ? URL.createObjectURL(urlOrFile) : urlOrFile,
+            resolve,
+            (e) => { const v = e.total ? Math.round(e.loaded / e.total * 100) : 0; prog.value = v; progTxt.textContent = v + "%"; },
+            (err) => reject(err)
+          );
+        });
+
+        const root = gltf.scene || gltf.scenes?.[0];
+        if (!root) { setInfo('エクスポート済みシーンが見つかりません'); return; }
+        root.userData.__isModelRoot = true;
+        scene.add(root);
+
+        // 透明マテリアルが真っ黒になるケース対策
+        root.traverse((o) => {
+          if (o.isMesh && o.material) {
+            const m = o.material;
+            if (Array.isArray(m)) m.forEach(mm => fixMaterial(mm));
+            else fixMaterial(m);
+          }
+        });
+
+        // カメラをモデルにフィット
+        fitCameraToObject(camera, root, controls);
+
+        // アニメーション
+        if (gltf.animations && gltf.animations.length) {
+          mixer = new THREE.AnimationMixer(root);
+          gltf.animations.forEach((clip) => {
+            const act = mixer.clipAction(clip);
+            act.play();
+            activeActions.push(act);
+          });
+          setInfo(`アニメーションクリップ: ${gltf.animations.length} 件`);
+        } else {
+          mixer = null;
+          setInfo('アニメーションなし（モデルは表示されています）');
+        }
+      } catch (err) {
+        console.error('GLB/GLTF 読み込み失敗', err);
+        if (String(err).includes('DRACO')) {
+          setInfo('読み込み失敗: Draco圧縮モデルです。ネット接続を確認してください。');
+        } else if (String(err).includes('KTX2')) {
+          setInfo('読み込み失敗: KTX2圧縮テクスチャです。対応ライブラリの取得に失敗しました。');
+        } else {
+          setInfo('読み込みに失敗しました。コンソールをご確認ください。');
+        }
+      }
+    }
+
+    function fixMaterial(mat) {
+      // glTFの不透明/透明設定が原因で真っ黒・真っ白になるのを軽減
+      mat.side = THREE.FrontSide;
+      if (mat.transparent && mat.opacity === 1) mat.transparent = false;
+      if ('emissiveIntensity' in mat && mat.emissiveIntensity === 0) mat.emissiveIntensity = 1;
+    }
+
+    function fitCameraToObject(camera, object, controls) {
+      const box = new THREE.Box3().setFromObject(object);
+      if (!isFinite(box.min.x) || !isFinite(box.max.x)) return; // 空
+      const size = box.getSize(new THREE.Vector3());
+      const center = box.getCenter(new THREE.Vector3());
+      const maxSize = Math.max(size.x, size.y, size.z) || 1;
+      const fitHeightDistance = maxSize / (2 * Math.tan((Math.PI * camera.fov / 360)));
+      const fitWidthDistance = fitHeightDistance / camera.aspect;
+      const distance = 1.25 * Math.max(fitHeightDistance, fitWidthDistance);
+      const dir = new THREE.Vector3().subVectors(camera.position, controls.target).normalize();
+      camera.position.copy(dir.multiplyScalar(distance).add(center));
+      controls.target.copy(center);
+      controls.update();
+    }
+
+    // 速度スライダー
+    const speed = document.getElementById('speed');
+    const speedVal = document.getElementById('speedVal');
+    function updateSpeed() {
+      const v = parseFloat(speed.value);
+      speedVal.textContent = v.toFixed(2) + '×';
+      if (mixer) mixer.timeScale = v; // three.js の推奨: timeScaleで速度調整
+    }
+    speed.addEventListener('input', updateSpeed);
+
+    // ファイル選択/ドラッグ&ドロップ
+    const fileInput = document.getElementById('file');
+    const loadBtn = document.getElementById('loadBtn');
+    const fileName = document.getElementById('fileName');
+
+    fileInput.addEventListener('change', async (e) => {
+      const f = e.target.files && e.target.files[0];
+      if (f) {
+        fileName.textContent = f.name;
+        loadBtn.disabled = false;
+        setInfo('選択中: ' + f.name + '（「読み込む」を押して開始）');
+      } else {
+        fileName.textContent = 'ファイル未選択';
+        loadBtn.disabled = true;
+      }
+    });
+
+    loadBtn.addEventListener('click', async () => {
+      const f = fileInput.files && fileInput.files[0];
+      if (!f) return;
+      loadBtn.disabled = true;
+      try {
+        await loadFileSmart(f);
+        setInfo('読み込み完了: ' + f.name);
+      } finally {
+        // 再読込できるように即時に有効化（好みで維持）
+        loadBtn.disabled = false;
+      }
+    });
+
+    const drop = document.getElementById('drop');
+    ;['dragenter', 'dragover'].forEach(ev => drop.addEventListener(ev, (e) => {
+      e.preventDefault(); e.stopPropagation();
+      if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
+      drop.classList.add('drag');
+    }));
+    ;['dragleave', 'drop'].forEach(ev => drop.addEventListener(ev, (e) => {
+      e.preventDefault(); e.stopPropagation();
+      drop.classList.remove('drag');
+    }));
+    drop.addEventListener('drop', async (e) => {
+      const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+      if (f) await loadFileSmart(f);
+    });
+
+    // ページ全体でのデフォルト挙動（ファイルを開いてしまう）を抑止
+    ['dragover', 'drop'].forEach(type => {
+      window.addEventListener(type, (e) => { e.preventDefault(); }, false);
+      document.addEventListener(type, (e) => { e.preventDefault(); }, false);
+    });
+
+    async function loadFileSmart(file) {
+      // まずは ObjectURL で試す
+      try {
+        await loadGLTF(file);
+      } catch (err) {
+        console.warn('ObjectURL 経由の読み込みに失敗。ArrayBufferで再試行します。', err);
+        // ArrayBuffer で直接 parse するフォールバック
+        try {
+          const arrayBuffer = await file.arrayBuffer();
+          await new Promise((resolve, reject) => {
+            loader.parse(
+              arrayBuffer,
+              '', // path
+              (gltf) => { // onLoad
+                // GLTFLoader.load と同じハンドラを使うため一度ラップ
+                // gltf をそのままハンドオフ
+                (async () => {
+                  const fakeFileUrl = file.name;
+                  // 以下、loadGLTF の後半だけを共通化したいが、簡便のため処理を複製
+                  // 既存を破棄
+                  if (mixer) { mixer.stopAllAction(); mixer.uncacheRoot(scene); }
+                  activeActions.forEach(a => a.stop());
+                  activeActions = [];
+                  const toRemove = [];
+                  scene.traverse(o => { if (o.userData.__isModelRoot) { toRemove.push(o); } });
+                  toRemove.forEach(o => scene.remove(o));
+
+                  const root = gltf.scene || gltf.scenes?.[0];
+                  if (!root) { setInfo('エクスポート済みシーンが見つかりません'); reject(new Error('no scene')); return; }
+                  root.userData.__isModelRoot = true;
+                  scene.add(root);
+
+                  root.traverse((o) => {
+                    if (o.isMesh && o.material) {
+                      const m = o.material;
+                      if (Array.isArray(m)) m.forEach(mm => fixMaterial(mm));
+                      else fixMaterial(m);
+                    }
+                  });
+
+                  fitCameraToObject(camera, root, controls);
+
+                  if (gltf.animations && gltf.animations.length) {
+                    mixer = new THREE.AnimationMixer(root);
+                    gltf.animations.forEach((clip) => {
+                      const act = mixer.clipAction(clip);
+                      act.play();
+                      activeActions.push(act);
+                    });
+                    setInfo(`アニメーションクリップ: ${gltf.animations.length} 件`);
+                  } else {
+                    mixer = null;
+                    setInfo('アニメーションなし（モデルは表示されています）');
+                  }
+                  resolve();
+                })();
+              },
+              (error) => { reject(error); }
+            );
+          });
+        } catch (err2) {
+          console.error('ArrayBuffer での読み込みも失敗', err2);
+          setInfo('読み込みに失敗しました。モデルファイルを確認してください。');
+        }
+      }
+    }
+
+    // リサイズ
+    function onResize() {
+      const w = container.clientWidth; const h = container.clientHeight;
+      renderer.setSize(w, h, false);
+      camera.aspect = Math.max(1e-6, w / h); camera.updateProjectionMatrix();
+    }
+    window.addEventListener('resize', onResize);
+
+    // ループ
+    renderer.setAnimationLoop(() => {
+      const dt = clock.getDelta();
+      if (mixer) mixer.update(dt);
+      controls.update();
+      renderer.render(scene, camera);
+    });
+
+    // 起動メッセージ
+    // 自動で models/blender_ani.glb を読み込み（なければドロップ/選択で開いてください）
+    (async () => {
+      try {
+        await loadGLTF('./models/blender_ani.glb');
+      } catch (_) { /* ない場合は無視 */ }
+      setInfo('GLB/GLTF を選択またはドロップしてください');
+    })();
+    updateSpeed();
+  </script>
+</body>
+
+</html>

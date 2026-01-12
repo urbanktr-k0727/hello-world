@@ -1,0 +1,326 @@
+<!doctype html>
+<html lang="ja">
+
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport"
+        content="width=device-width, initial-scale=1" />
+    <title>three.js × glTF アニメーション再生テンプレート</title>
+    <style>
+        html,
+        body {
+            margin: 0;
+            height: 100%;
+            background: #0b0f14;
+            color: #e6e6e6;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Hiragino Sans", "Noto Sans JP", "Helvetica Neue", Arial, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", sans-serif;
+        }
+
+        #app {
+            position: fixed;
+            inset: 0;
+        }
+
+        #ui {
+            position: fixed;
+            left: 16px;
+            bottom: 16px;
+            right: 16px;
+            display: grid;
+            gap: 8px;
+            grid-template-columns: 1fr;
+            background: rgba(0, 0, 0, 0.45);
+            padding: 12px;
+            border-radius: 12px;
+            backdrop-filter: blur(6px);
+            box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35);
+        }
+
+        #ui .row {
+            display: grid;
+            grid-template-columns: auto 1fr auto;
+            gap: 8px;
+            align-items: center;
+        }
+
+        #ui label {
+            font-size: 12px;
+            opacity: .9;
+        }
+
+        #ui select,
+        #ui input[type="range"],
+        #ui button {
+            width: 100%;
+        }
+
+        #ui button {
+            padding: 8px 12px;
+            border-radius: 8px;
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            background: rgba(255, 255, 255, 0.05);
+            color: #fff;
+            cursor: pointer;
+        }
+
+        #ui button:hover {
+            background: rgba(255, 255, 255, 0.1);
+        }
+
+        #notice {
+            position: fixed;
+            top: 12px;
+            left: 12px;
+            right: 12px;
+            padding: 10px 12px;
+            background: rgba(255, 255, 255, 0.06);
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            border-radius: 10px;
+            font-size: 12px;
+            line-height: 1.5;
+        }
+
+        a {
+            color: #9cd2ff;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="app"></div>
+    <div id="notice">
+        <b>使い方:</b> 同じフォルダに <code>model.glb</code> を置いてください。<br />
+        このファイルは ES Modules を使っているため、<b>ローカルサーバー</b>で開いてください（例: <code>npx http-server</code>、VSCode「Live Server」等）。
+    </div>
+
+    <div id="ui">
+        <div class="row">
+            <label>アニメーションクリップ</label>
+            <select id="clipSelect"></select>
+            <button id="playPause">⏸ 一時停止</button>
+        </div>
+        <div class="row">
+            <label>進行</label>
+            <input id="scrub"
+                type="range"
+                min="0"
+                max="1"
+                step="0.001"
+                value="0">
+            <span id="timeLabel">0.00s / 0.00s</span>
+        </div>
+        <div class="row">
+            <label>速度</label>
+            <input id="speed"
+                type="range"
+                min="0"
+                max="2"
+                step="0.01"
+                value="1">
+            <span id="speedLabel">1.00x</span>
+        </div>
+    </div>
+
+    <!-- three.js (r160 固定) と拡張 -->
+    <script type="module">
+        import * as THREE from 'https://unpkg.com/three@0.160.0/build/three.module.js';
+        import { OrbitControls } from 'https://unpkg.com/three@0.160.0/examples/jsm/controls/OrbitControls.js';
+        import { GLTFLoader } from 'https://unpkg.com/three@0.160.0/examples/jsm/loaders/GLTFLoader.js';
+        import { DRACOLoader } from 'https://unpkg.com/three@0.160.0/examples/jsm/loaders/DRACOLoader.js';
+
+        // ===== 基本セットアップ =====
+        const app = document.getElementById('app');
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.outputColorSpace = THREE.SRGBColorSpace;
+        renderer.shadowMap.enabled = true;
+        app.appendChild(renderer.domElement);
+
+        const scene = new THREE.Scene();
+        scene.background = null; // 透過背景
+        const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 2000);
+        camera.position.set(3, 2, 6);
+
+        const controls = new OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true;
+
+        // 環境光とディレクショナルライト
+        const hemi = new THREE.HemisphereLight(0xffffff, 0x334466, 0.5);
+        scene.add(hemi);
+        const dir = new THREE.DirectionalLight(0xffffff, 1.0);
+        dir.position.set(5, 5, 5);
+        dir.castShadow = true;
+        scene.add(dir);
+
+        // 床（簡易影確認用・不要なら削除）
+        const ground = new THREE.Mesh(
+            new THREE.PlaneGeometry(50, 50),
+            new THREE.MeshStandardMaterial({ color: 0x0f141b, metalness: 0.0, roughness: 1.0 })
+        );
+        ground.rotation.x = -Math.PI / 2;
+        ground.position.y = -0.001;
+        ground.receiveShadow = true;
+        scene.add(ground);
+
+        // ===== ローダー設定 =====
+        const dracoLoader = new DRACOLoader();
+        // GoogleのCDNにあるデコーダーを使用（Draco圧縮していない場合も問題なし）
+        dracoLoader.setDecoderPath('https://www.gstatic.com/draco/v1/decoders/');
+        const loader = new GLTFLoader();
+        loader.setDRACOLoader(dracoLoader);
+
+        // ===== アニメーション管理 =====
+        let mixer = null;
+        let actions = {};
+        let activeAction = null;
+        let activeClip = null;
+        let clock = new THREE.Clock();
+        let isPaused = false;
+
+        const ui = {
+            clipSelect: document.getElementById('clipSelect'),
+            playPause: document.getElementById('playPause'),
+            scrub: document.getElementById('scrub'),
+            timeLabel: document.getElementById('timeLabel'),
+            speed: document.getElementById('speed'),
+            speedLabel: document.getElementById('speedLabel'),
+        };
+
+        function populateClips(animations) {
+            ui.clipSelect.innerHTML = '';
+            animations.forEach((clip) => {
+                const opt = document.createElement('option');
+                opt.value = clip.name;
+                opt.textContent = clip.name;
+                ui.clipSelect.appendChild(opt);
+            });
+        }
+
+        function playClipByName(name, fade = 0.3) {
+            if (!mixer || !actions[name]) return;
+            const nextAction = actions[name];
+            if (activeAction === nextAction) return;
+
+            nextAction.reset().play();
+            if (activeAction) {
+                activeAction.crossFadeTo(nextAction, fade, false);
+            }
+            activeAction = nextAction;
+            activeClip = nextAction.getClip();
+            // ループ設定はglTF側の設定を尊重（必要ならここで上書き）
+            updateTimeUI();
+        }
+
+        function updateTimeUI() {
+            if (!activeAction) {
+                ui.scrub.value = 0;
+                ui.timeLabel.textContent = `0.00s / 0.00s`;
+                return;
+            }
+            const clip = activeAction.getClip();
+            const duration = clip.duration;
+            const time = activeAction.time % duration;
+            ui.scrub.value = (time / duration).toFixed(3);
+            ui.timeLabel.textContent = `${time.toFixed(2)}s / ${duration.toFixed(2)}s`;
+        }
+
+        // ===== glTF 読み込み =====
+        loader.load(
+            './model.glb', // 同じフォルダに置いたファイル名
+            (gltf) => {
+                const model = gltf.scene;
+                model.traverse((obj) => {
+                    if (obj.isMesh) {
+                        obj.castShadow = true;
+                        obj.receiveShadow = true;
+                    }
+                });
+                scene.add(model);
+
+                // モデルが大き過ぎる／小さ過ぎる場合はここで調整
+                // model.scale.setScalar(1.0);
+
+                // アニメーション準備
+                mixer = new THREE.AnimationMixer(model);
+                actions = {};
+                gltf.animations.forEach((clip) => {
+                    actions[clip.name] = mixer.clipAction(clip);
+                });
+
+                if (gltf.animations.length > 0) {
+                    populateClips(gltf.animations);
+                    playClipByName(gltf.animations[0].name, 0.0); // 最初のクリップを再生
+                } else {
+                    ui.clipSelect.innerHTML = '<option>(アニメーションなし)</option>';
+                }
+
+                // カメラオプション：glTF側にカメラが入っていればそれを使いたい場合
+                // if (gltf.cameras && gltf.cameras.length > 0) {
+                //   const cam = gltf.cameras[0];
+                //   camera.position.copy(cam.position);
+                // }
+
+            },
+            (e) => {
+                // 進捗（必要なら表示可能）
+                // console.log((e.loaded / e.total * 100).toFixed(1) + '%');
+            },
+            (err) => {
+                console.error(err);
+                alert('model.glb の読み込みに失敗しました。ファイルが同じフォルダにあるか確認してください。');
+            }
+        );
+
+        // ===== UI イベント =====
+        ui.clipSelect.addEventListener('change', (ev) => {
+            const name = ev.target.value;
+            playClipByName(name, 0.25);
+        });
+
+        ui.playPause.addEventListener('click', () => {
+            isPaused = !isPaused;
+            ui.playPause.textContent = isPaused ? '▶ 再生' : '⏸ 一時停止';
+        });
+
+        ui.speed.addEventListener('input', () => {
+            const speed = parseFloat(ui.speed.value);
+            ui.speedLabel.textContent = speed.toFixed(2) + 'x';
+        });
+
+        ui.scrub.addEventListener('input', () => {
+            if (!activeAction) return;
+            const clip = activeAction.getClip();
+            const t = parseFloat(ui.scrub.value) * clip.duration;
+            activeAction.time = t;
+            mixer.update(0); // 反映
+            updateTimeUI();
+        });
+
+        // ===== ループ =====
+        function animate() {
+            requestAnimationFrame(animate);
+            const dt = clock.getDelta();
+            controls.update();
+
+            if (mixer && !isPaused) {
+                const speed = parseFloat(ui.speed.value) || 1.0;
+                mixer.update(dt * speed);
+                updateTimeUI();
+            }
+
+            renderer.render(scene, camera);
+        }
+        animate();
+
+        // ===== リサイズ対応 =====
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+    </script>
+</body>
+
+</html>

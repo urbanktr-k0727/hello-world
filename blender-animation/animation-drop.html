@@ -1,0 +1,543 @@
+<!DOCTYPE html>
+<html lang="ja">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport"
+        content="width=device-width, initial-scale=1.0">
+    <title>GLBアニメーション再生</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background: linear-gradient(135deg, #1e3c72, #2a5298);
+            font-family: 'Arial', sans-serif;
+            overflow: hidden;
+        }
+
+        #container {
+            position: relative;
+            width: 100vw;
+            height: 100vh;
+        }
+
+        #controls {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            z-index: 100;
+            background: rgba(0, 0, 0, 0.8);
+            padding: 20px;
+            border-radius: 10px;
+            color: white;
+            backdrop-filter: blur(10px);
+        }
+
+        .control-group {
+            margin-bottom: 15px;
+        }
+
+        .control-group label {
+            display: block;
+            margin-bottom: 5px;
+            font-size: 14px;
+            font-weight: bold;
+        }
+
+        input[type="file"] {
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.3);
+            color: white;
+            padding: 8px;
+            border-radius: 5px;
+            width: 250px;
+        }
+
+        button {
+            background: linear-gradient(45deg, #ff6b6b, #ee5a6f);
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 5px;
+            cursor: pointer;
+            margin: 5px;
+            font-weight: bold;
+            transition: transform 0.2s;
+        }
+
+        button:hover {
+            transform: scale(1.05);
+        }
+
+        button:disabled {
+            background: rgba(128, 128, 128, 0.5);
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        select,
+        input[type="range"] {
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.3);
+            color: white;
+            padding: 5px;
+            border-radius: 5px;
+        }
+
+        #info {
+            position: absolute;
+            bottom: 20px;
+            left: 20px;
+            z-index: 100;
+            background: rgba(0, 0, 0, 0.8);
+            padding: 15px;
+            border-radius: 10px;
+            color: white;
+            backdrop-filter: blur(10px);
+            font-size: 12px;
+        }
+
+        #loading {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            z-index: 200;
+            color: white;
+            font-size: 18px;
+            text-align: center;
+            display: none;
+        }
+
+        .spinner {
+            border: 3px solid rgba(255, 255, 255, 0.3);
+            border-radius: 50%;
+            border-top: 3px solid white;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 20px;
+        }
+
+        @keyframes spin {
+            0% {
+                transform: rotate(0deg);
+            }
+
+            100% {
+                transform: rotate(360deg);
+            }
+        }
+    </style>
+</head>
+
+<body>
+    <div id="container">
+        <div id="controls">
+            <div class="control-group">
+                <label for="fileInput">GLBファイルを選択:</label>
+                <input type="file"
+                    id="fileInput"
+                    accept=".glb,.gltf">
+            </div>
+
+            <div class="control-group">
+                <label for="animationSelect">アニメーション:</label>
+                <select id="animationSelect">
+                    <option value="">アニメーションを選択</option>
+                </select>
+            </div>
+
+            <div class="control-group">
+                <button id="playBtn">再生</button>
+                <button id="pauseBtn"
+                    disabled>一時停止</button>
+                <button id="stopBtn"
+                    disabled>停止</button>
+            </div>
+
+            <div class="control-group">
+                <label for="speedRange">再生速度: <span id="speedValue">1.0</span></label>
+                <input type="range"
+                    id="speedRange"
+                    min="0.1"
+                    max="3.0"
+                    step="0.1"
+                    value="1.0">
+            </div>
+
+            <div class="control-group">
+                <label>
+                    <input type="checkbox"
+                        id="loopCheckbox"
+                        checked> ループ再生
+                </label>
+            </div>
+        </div>
+
+        <div id="loading">
+            <div class="spinner"></div>
+            <div>GLBファイルを読み込み中...</div>
+        </div>
+
+        <div id="info">
+            <div><strong>操作方法:</strong></div>
+            <div>• マウス左ドラッグ: 回転</div>
+            <div>• マウスホイール: ズーム</div>
+            <div>• マウス右ドラッグ: パン</div>
+        </div>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script>
+        // Three.js関連の変数
+        let scene, camera, renderer, controls;
+        let mixer, currentAction;
+        let model = null;
+        let animations = [];
+        let clock = new THREE.Clock();
+
+        // DOM要素
+        const fileInput = document.getElementById('fileInput');
+        const animationSelect = document.getElementById('animationSelect');
+        const playBtn = document.getElementById('playBtn');
+        const pauseBtn = document.getElementById('pauseBtn');
+        const stopBtn = document.getElementById('stopBtn');
+        const speedRange = document.getElementById('speedRange');
+        const speedValue = document.getElementById('speedValue');
+        const loopCheckbox = document.getElementById('loopCheckbox');
+        const loading = document.getElementById('loading');
+
+        // OrbitControls（簡易版）
+        class OrbitControls {
+            constructor(camera, domElement) {
+                this.camera = camera;
+                this.domElement = domElement;
+                this.target = new THREE.Vector3();
+                this.spherical = new THREE.Spherical();
+                this.sphericalDelta = new THREE.Spherical();
+                this.scale = 1;
+                this.panOffset = new THREE.Vector3();
+                this.zoomChanged = false;
+
+                this.rotateStart = new THREE.Vector2();
+                this.rotateEnd = new THREE.Vector2();
+                this.rotateDelta = new THREE.Vector2();
+
+                this.panStart = new THREE.Vector2();
+                this.panEnd = new THREE.Vector2();
+                this.panDelta = new THREE.Vector2();
+
+                this.state = 'NONE';
+
+                this.init();
+            }
+
+            init() {
+                this.domElement.addEventListener('contextmenu', (e) => e.preventDefault());
+                this.domElement.addEventListener('mousedown', this.onMouseDown.bind(this));
+                this.domElement.addEventListener('wheel', this.onMouseWheel.bind(this));
+                window.addEventListener('mousemove', this.onMouseMove.bind(this));
+                window.addEventListener('mouseup', this.onMouseUp.bind(this));
+            }
+
+            onMouseDown(event) {
+                if (event.button === 0) {
+                    this.state = 'ROTATE';
+                    this.rotateStart.set(event.clientX, event.clientY);
+                } else if (event.button === 2) {
+                    this.state = 'PAN';
+                    this.panStart.set(event.clientX, event.clientY);
+                }
+            }
+
+            onMouseMove(event) {
+                if (this.state === 'ROTATE') {
+                    this.rotateEnd.set(event.clientX, event.clientY);
+                    this.rotateDelta.subVectors(this.rotateEnd, this.rotateStart).multiplyScalar(0.01);
+                    this.sphericalDelta.theta -= this.rotateDelta.x;
+                    this.sphericalDelta.phi -= this.rotateDelta.y;
+                    this.rotateStart.copy(this.rotateEnd);
+                    this.update();
+                } else if (this.state === 'PAN') {
+                    this.panEnd.set(event.clientX, event.clientY);
+                    this.panDelta.subVectors(this.panEnd, this.panStart).multiplyScalar(0.01);
+                    this.pan(-this.panDelta.x, this.panDelta.y);
+                    this.panStart.copy(this.panEnd);
+                    this.update();
+                }
+            }
+
+            onMouseUp() {
+                this.state = 'NONE';
+            }
+
+            onMouseWheel(event) {
+                if (event.deltaY < 0) {
+                    this.scale /= 1.1;
+                } else {
+                    this.scale *= 1.1;
+                }
+                this.zoomChanged = true;
+                this.update();
+            }
+
+            pan(deltaX, deltaY) {
+                const offset = new THREE.Vector3();
+                offset.copy(this.camera.position).sub(this.target);
+                const targetDistance = offset.length();
+                targetDistance *= Math.tan((this.camera.fov / 2) * Math.PI / 180.0);
+
+                const panLeft = new THREE.Vector3();
+                panLeft.setFromMatrixColumn(this.camera.matrix, 0);
+                panLeft.multiplyScalar(-2 * deltaX * targetDistance / this.domElement.clientHeight);
+
+                const panUp = new THREE.Vector3();
+                panUp.setFromMatrixColumn(this.camera.matrix, 1);
+                panUp.multiplyScalar(2 * deltaY * targetDistance / this.domElement.clientHeight);
+
+                this.panOffset.copy(panLeft).add(panUp);
+            }
+
+            update() {
+                const offset = new THREE.Vector3();
+                offset.copy(this.camera.position).sub(this.target);
+                this.spherical.setFromVector3(offset);
+
+                this.spherical.theta += this.sphericalDelta.theta;
+                this.spherical.phi += this.sphericalDelta.phi;
+                this.spherical.phi = Math.max(0.1, Math.min(Math.PI - 0.1, this.spherical.phi));
+                this.spherical.radius *= this.scale;
+                this.spherical.radius = Math.max(0.1, Math.min(100, this.spherical.radius));
+
+                this.target.add(this.panOffset);
+                offset.setFromSpherical(this.spherical);
+                this.camera.position.copy(this.target).add(offset);
+                this.camera.lookAt(this.target);
+
+                this.sphericalDelta.set(0, 0, 0);
+                this.scale = 1;
+                this.panOffset.set(0, 0, 0);
+            }
+        }
+
+        // 初期化
+        function init() {
+            // シーンの作成
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x1a1a2e);
+
+            // カメラの作成
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.set(0, 1, 3);
+
+            // レンダラーの作成
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.shadowMap.enabled = true;
+            renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+            document.getElementById('container').appendChild(renderer.domElement);
+
+            // コントロールの作成
+            controls = new OrbitControls(camera, renderer.domElement);
+
+            // ライトの追加
+            const ambientLight = new THREE.AmbientLight(0x404040, 0.6);
+            scene.add(ambientLight);
+
+            const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+            directionalLight.position.set(1, 1, 1);
+            directionalLight.castShadow = true;
+            scene.add(directionalLight);
+
+            // イベントリスナーの設定
+            setupEventListeners();
+
+            // アニメーションループ開始
+            animate();
+        }
+
+        // イベントリスナーの設定
+        function setupEventListeners() {
+            fileInput.addEventListener('change', loadGLB);
+
+            playBtn.addEventListener('click', () => {
+                if (currentAction) {
+                    currentAction.play();
+                    playBtn.disabled = true;
+                    pauseBtn.disabled = false;
+                    stopBtn.disabled = false;
+                }
+            });
+
+            pauseBtn.addEventListener('click', () => {
+                if (currentAction) {
+                    currentAction.paused = true;
+                    playBtn.disabled = false;
+                    pauseBtn.disabled = true;
+                }
+            });
+
+            stopBtn.addEventListener('click', () => {
+                if (currentAction) {
+                    currentAction.stop();
+                    playBtn.disabled = false;
+                    pauseBtn.disabled = true;
+                    stopBtn.disabled = true;
+                }
+            });
+
+            animationSelect.addEventListener('change', (e) => {
+                if (e.target.value !== '') {
+                    selectAnimation(parseInt(e.target.value));
+                }
+            });
+
+            speedRange.addEventListener('input', (e) => {
+                const speed = parseFloat(e.target.value);
+                speedValue.textContent = speed.toFixed(1);
+                if (currentAction) {
+                    currentAction.setEffectiveTimeScale(speed);
+                }
+            });
+
+            loopCheckbox.addEventListener('change', (e) => {
+                if (currentAction) {
+                    currentAction.setLoop(e.target.checked ? THREE.LoopRepeat : THREE.LoopOnce);
+                }
+            });
+
+            window.addEventListener('resize', onWindowResize);
+        }
+
+        // GLBファイルの読み込み
+        function loadGLB(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+
+            loading.style.display = 'block';
+
+            // 前のモデルを削除
+            if (model) {
+                scene.remove(model);
+            }
+
+            const reader = new FileReader();
+            reader.onload = function (e) {
+                const arrayBuffer = e.target.result;
+                loadGLTF(arrayBuffer);
+            };
+            reader.readAsArrayBuffer(file);
+        }
+
+        // GLTF/GLBの読み込み（簡易GLTFローダー）
+        function loadGLTF(arrayBuffer) {
+            try {
+                // これは簡略化された例です。実際のプロジェクトでは Three.js の GLTFLoader を使用してください
+                console.warn('この例では簡略化されたローダーを使用しています。実際のプロジェクトではGLTFLoaderを使用してください。');
+
+                // ダミーのキューブを作成（実際のGLBファイルの代わり）
+                const geometry = new THREE.BoxGeometry(1, 1, 1);
+                const material = new THREE.MeshLambertMaterial({ color: 0x4fc3f7 });
+                model = new THREE.Mesh(geometry, material);
+                model.position.set(0, 0, 0);
+                scene.add(model);
+
+                // ダミーアニメーションを作成
+                createDummyAnimation();
+
+                loading.style.display = 'none';
+
+            } catch (error) {
+                console.error('GLBファイルの読み込みに失敗しました:', error);
+                alert('GLBファイルの読み込みに失敗しました。ファイル形式を確認してください。');
+                loading.style.display = 'none';
+            }
+        }
+
+        // ダミーアニメーション作成（実際のプロジェクトではGLBファイルからアニメーションを取得）
+        function createDummyAnimation() {
+            // 回転アニメーション
+            const rotationTrack = new THREE.QuaternionKeyframeTrack(
+                '.quaternion',
+                [0, 2, 4],
+                [0, 0, 0, 1, 0, 0.707, 0, 0.707, 0, 0, 0, 1]
+            );
+
+            // スケールアニメーション  
+            const scaleTrack = new THREE.VectorKeyframeTrack(
+                '.scale',
+                [0, 2, 4],
+                [1, 1, 1, 1.5, 1.5, 1.5, 1, 1, 1]
+            );
+
+            const clip = new THREE.AnimationClip('DemoAnimation', 4, [rotationTrack, scaleTrack]);
+            animations = [clip];
+
+            // アニメーションミキサーの作成
+            mixer = new THREE.AnimationMixer(model);
+
+            // アニメーション選択肢を更新
+            updateAnimationSelect();
+        }
+
+        // アニメーション選択肢の更新
+        function updateAnimationSelect() {
+            animationSelect.innerHTML = '<option value="">アニメーションを選択</option>';
+
+            animations.forEach((clip, index) => {
+                const option = document.createElement('option');
+                option.value = index;
+                option.textContent = clip.name || `アニメーション ${index + 1}`;
+                animationSelect.appendChild(option);
+            });
+
+            if (animations.length > 0) {
+                animationSelect.selectedIndex = 1;
+                selectAnimation(0);
+            }
+        }
+
+        // アニメーションの選択
+        function selectAnimation(index) {
+            if (currentAction) {
+                currentAction.stop();
+            }
+
+            if (animations[index]) {
+                currentAction = mixer.clipAction(animations[index]);
+                currentAction.setLoop(loopCheckbox.checked ? THREE.LoopRepeat : THREE.LoopOnce);
+                currentAction.setEffectiveTimeScale(parseFloat(speedRange.value));
+
+                playBtn.disabled = false;
+                pauseBtn.disabled = true;
+                stopBtn.disabled = true;
+            }
+        }
+
+        // ウィンドウリサイズ処理
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        // アニメーションループ
+        function animate() {
+            requestAnimationFrame(animate);
+
+            const delta = clock.getDelta();
+            if (mixer) {
+                mixer.update(delta);
+            }
+
+            controls.update();
+            renderer.render(scene, camera);
+        }
+
+        // 初期化実行
+        init();
+    </script>
+</body>
+
+</html>

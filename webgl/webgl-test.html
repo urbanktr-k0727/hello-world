@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="ja">
+
+<head>
+    <meta charset="UTF-8">
+    <title>GLB表示 - Three.js</title>
+    <style>
+        body {
+            margin: 0;
+            background-color: #222;
+            color: #fff;
+        }
+
+        canvas {
+            display: block;
+        }
+    </style>
+</head>
+
+<body>
+    <script type="module">
+        import * as THREE from './three.module.js';
+        import { GLTFLoader } from './GLTFLoader.js';
+
+        // シーン、カメラ、レンダラーを作成
+        const scene = new THREE.Scene();
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        document.body.appendChild(renderer.domElement);
+
+        // 環境光
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.8);
+        scene.add(ambientLight);
+
+        // 方向光 (影を付けるため)
+        const directionalLight = new THREE.DirectionalLight(0xffffff, 1);
+        directionalLight.position.set(5, 10, 7.5);
+        scene.add(directionalLight);
+
+        // グリッドヘルパー
+        const gridHelper = new THREE.GridHelper(20, 20);
+        scene.add(gridHelper);
+
+        // 軸ヘルパー (X: 赤, Y: 緑, Z: 青)
+        const axesHelper = new THREE.AxesHelper(10);
+        scene.add(axesHelper);
+
+        // GLTFローダー
+        const loader = new GLTFLoader();
+        loader.load('test.glb', (gltf) => {
+            const model = gltf.scene;
+            model.scale.set(1, 1, 1); // スケーリング確認
+            model.position.set(0, 0, 0); // 位置確認
+            scene.add(model);
+
+            console.log("モデルが読み込まれました:", model);
+
+            // モデルの情報を表示
+            model.traverse((child) => {
+                if (child.isMesh) {
+                    console.log("メッシュ名:", child.name);
+                    console.log("ポジション:", child.position);
+                    console.log("スケール:", child.scale);
+                }
+            });
+        }, undefined, (error) => {
+            console.error("モデルの読み込みエラー:", error);
+        });
+
+        camera.position.set(0, 2, 10); // カメラ位置を調整
+
+        // アニメーションループ
+        function animate() {
+            requestAnimationFrame(animate);
+            renderer.render(scene, camera);
+        }
+        animate();
+
+        // ウィンドウリサイズ対応
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+    </script>
+</body>
+
+</html>

@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8">
+
+</head>
+
+<body>
+    <canvas id="canvas1"
+        width=600
+        height=600></canvas>
+    <script type="importmap">{"imports": {"three": "./three.module.js"}}</script>
+    <script type="module">
+        import * as THREE from 'three';
+        import { GLTFLoader } from './GLTFLoader.js';
+        import { DRACOLoader } from './DRACOLoader.js';
+
+        let renderer;
+        let scene;
+        let camera;
+
+        scene = new THREE.Scene();
+        const canvas = document.querySelector("#canvas1");
+        renderer = new THREE.WebGLRenderer({ canvas: canvas });
+
+        const width = canvas.width;
+        const height = canvas.height;
+        renderer.setSize(width, height);
+
+        setupCamera();
+        loadObjects(scene, "./test.glb");
+        setupLights(scene);
+
+        function setupCamera() {
+            const canvas = document.querySelector("#canvas1");
+            const width = canvas.width;
+            const height = canvas.height;
+
+            camera = new THREE.PerspectiveCamera(45, width / height, 0.1, 3000);
+            camera.position.set(4, 4, 4);
+            camera.lookAt(new THREE.Vector3(0, 0, 0));
+        }
+
+        function render() {
+            renderer.render(scene, camera);
+        }
+
+        function setupLights(scene) {
+            let ambientLight = new THREE.AmbientLight(0xffffff);
+            ambientLight.intensity = 1;
+            scene.add(ambientLight);
+        }
+
+        function loadObjects(scene, path) {
+            const loader = new GLTFLoader();
+            loader.load(path, function (gltf) {
+                let box = gltf.scene;
+                scene.add(box);
+                requestAnimationFrame(render);
+            }, undefined, function (e) {
+                console.error(e);
+            });
+        }
+
+    </script>
+</body>
+
+</html>

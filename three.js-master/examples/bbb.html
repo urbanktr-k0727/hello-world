@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <title>three.js webgl - Multiple Camera Views with Array Management (Shadows with Ground Plane)</title>
+    <meta charset="shift-jis">
+    <meta name="viewport"
+        content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
+    <link type="text/css"
+        rel="stylesheet"
+        href="main.css">
+    <style>
+        /* リンク用コンテナのスタイル */
+        #links {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            z-index: 100;
+            background: rgba(255, 255, 255, 0.8);
+            padding: 10px;
+            border-radius: 5px;
+        }
+
+        /* 各リンクのスタイル */
+        #links a {
+            display: block;
+            margin-bottom: 5px;
+            text-decoration: none;
+            color: #000;
+            font-weight: bold;
+        }
+    </style>
+</head>
+
+<body>
+
+    <!-- リンク群を動的に生成するためのコンテナ -->
+    <div id="links"></div>
+
+    <!-- importmapでthree.jsとaddonsのパスを設定 -->
+    <script type="importmap">
+    {
+      "imports": {
+        "three": "../build/three.module.js",
+        "three/addons/": "./jsm/"
+      }
+    }
+  </script>
+
+    <script type="module">
+        // 必要なモジュールをインポート
+        import * as THREE from 'three';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+        import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+        import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
+
+        // グローバル変数
+        let camera, scene, renderer, controls;
+        // モデル本体を含むpivotグループ（回転軸として利用）
+        let modelPivot = null;
+        // 現在のモデルのオフセット（pivot内での位置）
+        let currentOffset = new THREE.Vector3(0, 0, 0);
+
+        /* 各ビューの設定を配列で管理
+           ・name   : 表示するリンク名
+           ・position: カメラの位置
+           ・target : OrbitControlsが注視する焦点
+           ・offset : pivot内でのモデルの位置（この値により、回転軸が変わる）
+               View1は原点中心、View2/3は注視点との差分で設定 */
+        const views = [
+            {
+                name: '千里山キャンパス全体',
+                position: new THREE.Vector3(0, 4, 5),
+                target: new THREE.Vector3(0, 0, 0),
+                offset: new THREE.Vector3(0, 0, 0)
+            },
+            {
+                name: '新関西大学会館 南棟',
+                position: new THREE.Vector3(0, 2, 3),
+                target: new THREE.Vector3(1.7, 0, 2.5),
+                offset: new THREE.Vector3(-1.7, 0, -2.5)
+            },
+            {
+                name: '関西大学 図書館',
+                position: new THREE.Vector3(0, 1, 2),
+                target: new THREE.Vector3(-0.5, 0, 0.8),
+                offset: new THREE.Vector3(0.5, 0, -0.8)
+            },
+            {
+                name: '関西大学 イノベーション創生センター',
+                position: new THREE.Vector3(0, 1, -1),
+                target: new THREE.Vector3(-1, 0, -1.4),
+                offset: new THREE.Vector3(1, 0, 1.4)
+            }
+            // 必要に応じてさらにビューを追加可能
+        ];
+
+        // 初期化処理
+        init();
+
+        function init() {
+            // レンダリング用のコンテナdivを作成してbodyに追加
+            const container = document.createElement('div');
+            document.body.appendChild(container);
+
+            // パースペクティブカメラの生成（初期はviews[0]の設定）
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.25, 20);
+            camera.position.copy(views[0].position);
+
+            // シーンの生成
+            scene = new THREE.Scene();
+
+            // ----- ライティングの追加 -----
+            // 環境光（シーン全体を柔らかく照らす）
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0);
+            scene.add(ambientLight);
+
+            // 影が有効になるDirectionalLight（斜めから照射）
+            // const directionalLight = new THREE.DirectionalLight(0x808080, 0.25);
+            // directionalLight.position.set(10, 10, 10);
+            // directionalLight.castShadow = true;
+            // directionalLight.shadow.mapSize.width = 1024;
+            // directionalLight.shadow.mapSize.height = 1024;
+            // directionalLight.shadow.camera.left = -15;
+            // directionalLight.shadow.camera.right = 15;
+            // directionalLight.shadow.camera.top = 15;
+            // directionalLight.shadow.camera.bottom = -15;
+            // directionalLight.shadow.camera.near = 1;
+            // directionalLight.shadow.camera.far = 5;
+            // scene.add(directionalLight);
+
+            // DirectionalLight のシャドウカメラを可視化するヘルパー
+            // const lightCameraHelper = new THREE.CameraHelper(directionalLight.shadow.camera);
+            // scene.add(lightCameraHelper);
+            // ---------------------------
+
+            // ----- 地面（グラウンドプレーン）の追加 -----
+            // 地面はオブジェクトの影を受け取るために必要
+            // const groundGeometry = new THREE.PlaneGeometry(50, 50);
+            // const groundMaterial = new THREE.MeshStandardMaterial({ color: 0x808080 });
+            // const ground = new THREE.Mesh(groundGeometry, groundMaterial);
+            // ground.rotation.x = -Math.PI / 2; // 地面を水平に配置
+            // ground.position.y = -0.01; // z-fighting防止のため少し下げる
+            // ground.receiveShadow = true;
+            // scene.add(ground);
+            // -------------------------------------
+
+            // HDR背景テクスチャの読み込み
+            new RGBELoader()
+                .setPath('textures/equirectangular/')
+                .load('royal_esplanade_1k.hdr', function (texture) {
+                    texture.mapping = THREE.EquirectangularReflectionMapping;
+                    scene.background = texture;
+                    scene.environment = texture;
+
+                    // GLTFLoaderで3Dモデルを読み込み、pivotグループに追加
+                    const loader = new GLTFLoader().setPath('models/gltf/DamagedHelmet/glTF/');
+                    loader.load('kandai-senriyama.gltf', async function (gltf) {
+                        const loadedModel = gltf.scene;
+                        // バウンディングボックスを利用してモデルの中心を求め、再配置
+                        const box = new THREE.Box3().setFromObject(loadedModel);
+                        const center = box.getCenter(new THREE.Vector3());
+                        loadedModel.position.sub(center);
+
+                        // 各メッシュに対して影のキャスト・受信を有効化
+                        loadedModel.traverse(child => {
+                            if (child.isMesh) {
+                                child.castShadow = true;
+                                child.receiveShadow = true;
+                            }
+                        });
+
+                        // pivotグループを作成し、モデルをその子要素として追加
+                        modelPivot = new THREE.Group();
+                        loadedModel.position.copy(currentOffset);
+                        modelPivot.add(loadedModel);
+                        // pivotグループの位置は初期ビューの注視点に設定
+                        modelPivot.position.copy(views[0].target);
+                        scene.add(modelPivot);
+                    });
+                });
+
+            // WebGLレンダラーの生成（アンチエイリアス有効）
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setPixelRatio(window.devicePixelRatio);
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.toneMapping = THREE.ACESFilmicToneMapping;
+            renderer.toneMappingExposure = 1;
+            // シャドウマップを有効化
+            renderer.shadowMap.enabled = true;
+            renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+            container.appendChild(renderer.domElement);
+
+            // OrbitControlsの生成（マウス操作でカメラ操作を可能にする）
+            controls = new OrbitControls(camera, renderer.domElement);
+            controls.addEventListener('change', render);
+            controls.minDistance = 2;
+            controls.maxDistance = 10;
+            controls.target.copy(views[0].target);
+            controls.update();
+
+            // ブラウザリサイズ時のイベント設定
+            window.addEventListener('resize', onWindowResize);
+
+            // 配列viewsからリンク要素を動的に生成
+            const linksContainer = document.getElementById('links');
+            views.forEach((view, index) => {
+                const a = document.createElement('a');
+                a.href = '#';
+                a.textContent = view.name;
+                a.addEventListener('click', function (event) {
+                    event.preventDefault();
+                    changeView(index);
+                });
+                linksContainer.appendChild(a);
+            });
+
+            // アニメーションループ開始
+            animateScene();
+        }
+
+        // ウィンドウリサイズ時の処理
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            render();
+        }
+
+        // イージング関数：easeInOutQuad（0～1のtに対して滑らかな補間値を返す）
+        function easeInOutQuad(t) {
+            return t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t;
+        }
+
+        // カメラ位置とOrbitControlsのターゲットをイージング付きで補間する関数
+        function animateCamera(fromPos, toPos, fromTarget, toTarget, duration) {
+            const startTime = performance.now();
+            function animate() {
+                const elapsed = performance.now() - startTime;
+                let t = Math.min(elapsed / duration, 1);
+                t = easeInOutQuad(t);
+                camera.position.lerpVectors(fromPos, toPos, t);
+                controls.target.lerpVectors(fromTarget, toTarget, t);
+                controls.update();
+                renderer.render(scene, camera);
+                if (elapsed < duration) {
+                    requestAnimationFrame(animate);
+                }
+            }
+            animate();
+        }
+
+        // モデルのオフセット（pivot内での位置）をイージング付きで補間する関数
+        function animateModelOffset(fromOffset, toOffset, duration) {
+            const startTime = performance.now();
+            function animateOffset() {
+                const elapsed = performance.now() - startTime;
+                let t = Math.min(elapsed / duration, 1);
+                t = easeInOutQuad(t);
+                const newOffset = fromOffset.clone().lerp(toOffset, t);
+                if (modelPivot && modelPivot.children[0]) {
+                    modelPivot.children[0].position.copy(newOffset);
+                }
+                if (elapsed < duration) {
+                    requestAnimationFrame(animateOffset);
+                }
+            }
+            animateOffset();
+        }
+
+        // ビュー切替時の処理
+        function changeView(index) {
+            const view = views[index];
+            const duration = 1000; // アニメーション時間(ms)
+            animateCamera(
+                camera.position.clone(), view.position,
+                controls.target.clone(), view.target,
+                duration
+            );
+            animateModelOffset(currentOffset.clone(), view.offset, duration);
+            currentOffset.copy(view.offset);
+        }
+
+        // アニメーションループ：シーン更新とレンダリング
+        function animateScene() {
+            requestAnimationFrame(animateScene);
+            if (modelPivot) {
+                // pivotグループの位置を常に現在の注視点に合わせる
+                modelPivot.position.copy(controls.target);
+                // pivotグループをy軸周りに回転（上から見て時計回り）
+                modelPivot.rotation.y -= 0.002;
+            }
+            controls.update();
+            renderer.render(scene, camera);
+        }
+
+        // 単一レンダリング
+        function render() {
+            renderer.render(scene, camera);
+        }
+    </script>
+
+</body>
+
+</html>
